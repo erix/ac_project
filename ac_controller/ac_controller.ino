@@ -59,11 +59,23 @@ bool ac_on = false;          // the heater status
 bool ac_automatics = false;
 
 
-void setupAlarms() {
-  // create the alarms 
-  Alarm.alarmRepeat(auto_switch_on_hour,00,0, handleAlarmOn);  // 7:00am every day
-  Alarm.alarmRepeat(auto_switch_off_hour,00,0,handleAlarmOff);  // 3:00pm every day 
-}  
+void acOn() {
+  Serial.println(F("On"));
+  sendBuffer[5] = 0x20;
+  sendBuffer[17] = 0x36;
+  if (temperatures.outside > -13) {
+    pending = true; // schedule for sending
+    ac_on = true;
+  }
+}
+
+void acOff() {
+  Serial.println(F("Off"));
+  sendBuffer[5] = 0x00;
+  sendBuffer[17] = 0x16;
+  pending = true; // schedule for sending
+  ac_on = false;
+}
 
 // functions to be called when an alarm triggers:
 void handleAlarmOn(){
@@ -79,8 +91,115 @@ void handleAlarmOff(){
   }
 }
 
+void setupAlarms() {
+  // create the alarms 
+  Alarm.alarmRepeat(auto_switch_on_hour,00,0, handleAlarmOn);  // 7:00am every day
+  Alarm.alarmRepeat(auto_switch_off_hour,00,0,handleAlarmOff);  // 3:00pm every day 
+}  
+
 bool isAutomaticsOn() {
   return (hour() >= auto_switch_on_hour) && (hour() < auto_switch_off_hour);
+}
+
+void connection(String data) {
+  String id;
+  int err = 0;
+  String auth_resp = "";
+  Serial.println(F("Pusher connection established"));
+  id = PusherClient::parseMessageMember("socket_id", data);
+//  id.toCharArray(socket_id, sizeof(socket_id));
+  Serial.println(id);
+  String query = "/pusher/auth?socket_id="+id+"&channel_name="+presence_channel+"&user_id=arduino";
+  char buf[256];
+  query.toCharArray(buf, 256);
+  err = http.get("192.168.1.45",5000, buf);
+  if (err == 0) {
+    Serial.println("startedRequest ok");
+    
+
+    err = http.responseStatusCode();
+    if (err >= 0) {
+      Serial.print("Got status code: ");
+      Serial.println(err);
+
+      // Usually you'd check that the response code is 200 or a
+      // similar "success" code (200-299) before carrying on,
+      // but we'll print out whatever response we get
+
+      err = http.skipResponseHeaders();
+      if (err >= 0) {
+        int bodyLen = http.contentLength();    
+        http.setTimeout(kNetworkTimeout);
+        int i = http.readBytes(buf, bodyLen);
+        auth_token = PusherClient::parseMessageMember("auth", String(buf));
+        client.subscribe(presence_channel, auth_token, "arduino"); 
+        Serial.println(auth_token);
+      }
+      else
+      {
+        Serial.print("Failed to skip response headers: ");
+        Serial.println(err);
+      }
+    }
+    else
+    {    
+      Serial.print("Getting response failed: ");
+      Serial.println(err);
+    }
+  }
+  else
+  {
+    Serial.print("Connect failed: ");
+    Serial.println(err);
+  }
+  http.stop();
+  
+  Serial.println(auth_resp);
+}
+
+
+void sendTempToPusher(String tempStr) {
+  String data = "{\"temp\":\""+ tempStr + "\"}";
+  client.triggerEvent("client-temp", data , presence_channel);  
+  
+}
+
+String toString(float val) {
+  char buf[10];
+  dtostrf(val,1,2, buf);
+  return String(buf);
+}
+
+void newWebClient(String data) {
+  sendTempToPusher(toString(temperatures.inside));
+}
+
+void pusherOn(String data) {
+  Serial.println("On: " + data);
+  acOn();
+}
+
+void pusherOff(String data) {
+  Serial.println("Off: " + data);
+  acOff();
+}
+
+void ping(String data) {
+  client.triggerEvent("pusher:pong", "{}");
+}
+
+void check_temp() {
+  if (ac_on) {
+    if(temperatures.inside > temp_upper_limit) {
+      Serial.println(F("Temperature inside raised: switching OFF"));
+      acOff();
+    }
+  } else {  
+    if(temperatures.inside < temp_lower_limit) {
+      Serial.println(F("Temperature inside dropped: switching ON"));
+      acOn();
+    }
+  }
 }
 
 
@@ -141,49 +260,6 @@ void setup () {
   Serial.println(F("Ready"));
 }
 
-
-void sendTempToPusher(String tempStr) {
-  String data = "{\"temp\":\""+ tempStr + "\"}";
-  client.triggerEvent("client-temp", data , presence_channel);  
-  
-}
-
-void newWebClient(String data) {
-  sendTempToPusher(toString(temperatures.inside));
-}
-
-void pusherOn(String data) {
-  Serial.println("On: " + data);
-  acOn();
-}
-
-void pusherOff(String data) {
-  Serial.println("Off: " + data);
-  acOff();
-}
-
-void acOn() {
-  Serial.println(F("On"));
-  sendBuffer[5] = 0x20;
-  sendBuffer[17] = 0x36;
-  if (temperatures.outside > -13) {
-    pending = true; // schedule for sending
-    ac_on = true;
-  }
-}
-
-void acOff() {
-  Serial.println(F("Off"));
-  sendBuffer[5] = 0x00;
-  sendBuffer[17] = 0x16;
-  pending = true; // schedule for sending
-  ac_on = false;
-}
-
-void ping(String data) {
-  client.triggerEvent("pusher:pong", "{}");
-}
-
 void loop () {
   Alarm.delay(0);
   // Pusher monitoring
@@ -231,80 +307,4 @@ void loop () {
 
 }
 
-String toString(float val) {
-  char buf[10];
-  dtostrf(val,1,2, buf);
-  return String(buf);
-}
-
-void check_temp() {
-  if (ac_on) {
-    if(temperatures.inside > temp_upper_limit) {
-      Serial.println(F("Temperature inside raised: switching OFF"));
-      acOff();
-    }
-  } else {  
-    if(temperatures.inside < temp_lower_limit) {
-      Serial.println(F("Temperature inside dropped: switching ON"));
-      acOn();
-    }
-  }
-}
-
-
-void connection(String data) {
-  String id;
-  int err = 0;
-  String auth_resp = "";
-  Serial.println(F("Pusher connection established"));
-  id = PusherClient::parseMessageMember("socket_id", data);
-//  id.toCharArray(socket_id, sizeof(socket_id));
-  Serial.println(id);
-  String query = "/pusher/auth?socket_id="+id+"&channel_name="+presence_channel+"&user_id=arduino";
-  char buf[256];
-  query.toCharArray(buf, 256);
-  err = http.get("192.168.1.45",5000, buf);
-  if (err == 0) {
-    Serial.println("startedRequest ok");
-    
-
-    err = http.responseStatusCode();
-    if (err >= 0) {
-      Serial.print("Got status code: ");
-      Serial.println(err);
-
-      // Usually you'd check that the response code is 200 or a
-      // similar "success" code (200-299) before carrying on,
-      // but we'll print out whatever response we get
-
-      err = http.skipResponseHeaders();
-      if (err >= 0) {
-        int bodyLen = http.contentLength();    
-        http.setTimeout(kNetworkTimeout);
-        int i = http.readBytes(buf, bodyLen);
-        auth_token = PusherClient::parseMessageMember("auth", String(buf));
-        client.subscribe(presence_channel, auth_token, "arduino"); 
-        Serial.println(auth_token);
-      }
-      else
-      {
-        Serial.print("Failed to skip response headers: ");
-        Serial.println(err);
-      }
-    }
-    else
-    {    
-      Serial.print("Getting response failed: ");
-      Serial.println(err);
-    }
-  }
-  else
-  {
-    Serial.print("Connect failed: ");
-    Serial.println(err);
-  }
-  http.stop();
-  
-  Serial.println(auth_resp);
-}
 
