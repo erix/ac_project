@@ -25,6 +25,9 @@ byte own_ip[] = { 192,168,1,201 };
 char channel[] = "arduino";
 char presence_channel[] = "presence-arduino";
 
+char server[] = "mysmarthome.herokuapp.com";
+//char srever[] = "192.168.1.45";
+
 PusherClient client;
 MilliTimer sendTimer;
 bool pending = false;
@@ -112,7 +115,7 @@ void connection(String data) {
   String query = "/pusher/auth?socket_id="+id+"&channel_name="+presence_channel+"&user_id=arduino";
   char buf[256];
   query.toCharArray(buf, 256);
-  err = http.get("192.168.1.45",5000, buf);
+  err = http.get(server,80, buf);
   if (err == 0) {
     Serial.println("startedRequest ok");
     
